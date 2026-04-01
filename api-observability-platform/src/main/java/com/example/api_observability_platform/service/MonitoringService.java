@@ -38,7 +38,13 @@ public class MonitoringService {
     public void saveLog(ApiLog log) {
         Long userId = (log.getUser() != null) ? log.getUser().getId() : 0L;
         String userKey = "stats:user:" + userId;
-        updateRedisStats(userKey, log);
+        
+        // 🔥 Wrap Redis in try-catch so the API stays alive even if Redis is slow
+        try {
+            updateRedisStats(userKey, log);
+        } catch (Exception e) {
+            System.err.println("⚠️ Redis Analytics Error: " + e.getMessage());
+        }
 
         logBuffer.add(log);
 
@@ -52,17 +58,17 @@ public class MonitoringService {
     }
 
     private void updateRedisStats(String key, ApiLog log) {
+        // 1. Counters & Leaderboards
         redisTemplate.opsForHash().increment(key, "totalRequests", 1);
-        String endpointKey = key + ":endpoints";
-        redisTemplate.opsForZSet().incrementScore(endpointKey, log.getEndpoint(), 1);
+        redisTemplate.opsForZSet().incrementScore(key + ":endpoints", log.getEndpoint(), 1);
 
-        if (log.getCountry() != null) {
+        // 2. Geo & Browser (For Donut Charts)
+        if (log.getCountry() != null) 
             redisTemplate.opsForHash().increment(key + ":geo", log.getCountry(), 1);
-        }
-        if (log.getBrowser() != null) {
+        if (log.getBrowser() != null) 
             redisTemplate.opsForHash().increment(key + ":browsers", log.getBrowser(), 1);
-        }
 
+        // 3. Timeline Bucketing (For Bar Chart)
         String timeMinute = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd:HH:mm"));
         String timelineKey = key + ":timeline:" + timeMinute;
         String statusField = log.getStatusCode() >= 400 ? "fail" : "success";
@@ -70,6 +76,7 @@ public class MonitoringService {
         redisTemplate.opsForHash().increment(timelineKey, statusField, 1);
         redisTemplate.expire(timelineKey, Duration.ofHours(24));
 
+        // 4. Status Distributions
         if (log.getStatusCode() >= 200 && log.getStatusCode() < 300) 
             redisTemplate.opsForHash().increment(key, "status2xx", 1);
         else if (log.getStatusCode() >= 400 && log.getStatusCode() < 500) 
@@ -80,6 +87,7 @@ public class MonitoringService {
         if (log.getStatusCode() >= 400) 
             redisTemplate.opsForHash().increment(key, "totalErrors", 1);
 
+        // 5. Performance Monitoring
         if (log.getResponseTime() < 200) 
             redisTemplate.opsForHash().increment(key, "fastRequests", 1);
         else if (log.getResponseTime() > 1000) 
@@ -89,14 +97,11 @@ public class MonitoringService {
     @Scheduled(fixedRate = 5000)
     public void flushLogsToDatabase() {
         if (logBuffer.isEmpty()) return;
-
         List<ApiLog> batch = new ArrayList<>();
         ApiLog currentLog;
-        
         while ((currentLog = logBuffer.poll()) != null) {
             batch.add(currentLog);
         }
-
         if (!batch.isEmpty()) {
             apiLogRepository.saveAll(batch); 
         }
@@ -117,21 +122,21 @@ public class MonitoringService {
         return apiLogRepository.findByUserIdOrderByTimestampDesc(userId, pageable);
     }
 
-    // 🔥 NEW: REDIS PENALTY HELPERS FOR DYNAMIC THROTTLING
-
-    /**
-     * Increments the "Strike" count in Redis.
-     * If strikes hit 3, the user is penalized for 10 minutes.
-     */
+    // 🛡️ Dynamic Throttling Redis Helpers
     public void incrementPenaltyStrike(String key, int penaltyMinutes) {
-        redisTemplate.opsForValue().increment(key);
-        redisTemplate.expire(key, Duration.ofMinutes(penaltyMinutes));
+        try {
+            redisTemplate.opsForValue().increment(key);
+            redisTemplate.expire(key, Duration.ofMinutes(penaltyMinutes));
+        } catch (Exception e) {
+            System.err.println("❌ Failed to set penalty strike: " + e.getMessage());
+        }
     }
 
-    /**
-     * Reads the current strike count from Redis.
-     */
     public String getRedisValue(String key) {
-        return redisTemplate.opsForValue().get(key);
+        try {
+            return redisTemplate.opsForValue().get(key);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

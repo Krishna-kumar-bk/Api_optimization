@@ -67,12 +67,19 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // 🔥 IMPORTANT FIX (Render + frontend)
-        configuration.setAllowedOrigins(List.of("*"));
+        // ✅ Explicitly allow your Vercel frontend
+        configuration.setAllowedOrigins(List.of(
+            "https://api-optimization.vercel.app", 
+            "http://localhost:3000" // Keep local for testing
+        ));
 
         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type"));
-        configuration.setAllowCredentials(false); // must be false when using "*"
+        
+        // ✅ Add "Authorization" and "Content-Type" specifically
+        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Trace-ID"));
+        
+        // ✅ Change to true now that we have specific origins
+        configuration.setAllowCredentials(true); 
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
